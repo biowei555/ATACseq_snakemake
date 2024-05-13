@@ -1,0 +1,210 @@
+#############################################################
+#2024-03-15                                                 #
+#Made by zw                                                 #
+#ATAC-seq pipeline with snakemake                           #
+#############################################################
+
+
+#Please rename and write your index of file                 
+
+REP_INDEX = {"1", "2"}
+trim_galore = "/home/data/D602_public/miniconda3/envs/trim-galore"
+PICARD = "/home/data/D602_public/soft/picard.jar"
+
+rule all:
+	input :
+		expand("1.Trimmingdata/{rep}_1_val_1.fq.gz",rep=REP_INDEX),
+		expand("1.Trimmingdata/{rep}_2_val_2.fq.gz",rep=REP_INDEX),
+		expand("2.Align/{rep}_1_val.sam",rep=REP_INDEX),
+		expand("3.Samtools/{rep}.bam",rep=REP_INDEX),
+		expand("3.Samtools/{rep}_sorted.bam",rep=REP_INDEX),
+		expand("3.Samtools/{rep}_sorted.bam.bai",rep=REP_INDEX),
+		expand("3.Samtools/{rep}_sorted_unique_mapped.bam",rep=REP_INDEX),
+        expand("3.Samtools/{rep}_sorted_unique_mapped_rd.bam",rep=REP_INDEX),
+        expand("3.Samtools/{rep}_sorted_unique_mapped_rd_filtered.bam",rep=REP_INDEX),
+        expand("3.Samtools/{rep}_sorted_unique_mapped_rd_filtered.bam.bai",rep=REP_INDEX),
+        expand("3.Samtools/{rep}_aligned.bam",rep=REP_INDEX),
+        expand("4.Filteredbam/{rep}_final.bam",rep=REP_INDEX),
+        expand("4.Filteredbam/{rep}_final.bam.bai",rep=REP_INDEX),
+        expand("4.Filteredbam/bw/{rep}_RPKM.bw",rep=REP_INDEX),
+        expand("4.Filteredbam/bw/{rep}_RPGC.bw",rep=REP_INDEX),
+        expand("4.Filteredbam/{rep}_final.bed",rep=REP_INDEX),
+        expand("5.Callpeak/{rep}_peaks.narrowPeak",rep=REP_INDEX)
+
+rule Trim_galore:
+    input:
+        r1="0.Rawdata/{rep}_1.fq.gz",
+        r2="0.Rawdata/{rep}_2.fq.gz"
+    output:
+        r1_trimmed="1.Trimmingdata/{rep}_1_val_1.fq.gz",
+        r2_trimmed="1.Trimmingdata/{rep}_2_val_2.fq.gz"
+    shell:
+        """    
+        trim_galore -q 30 --phred33 --stringency 3 --length 50 --paired {input.r1} {input.r2} --gzip -o ./1.Trimmingdata --cores 4
+        wait 
+        """
+
+rule bowtie2_mapping:
+	input:
+		"1.Trimmingdata/{rep}_1_val_1.fq.gz",
+		"1.Trimmingdata/{rep}_2_val_2.fq.gz"
+	output:
+		"2.Align/{rep}_1_val.sam"
+	log:
+		"2.Align/{rep}_1_val.log"         
+	shell:
+		"bowtie2 -p 10 \
+		-x /home/data/D602_public/zw_data/At_genome/At_bowtie2_index/Athaliana_447_TAIR10 \
+		-1 {input[0]} -2 {input[1]} \
+        --no-unal \
+        --no-mixed --no-discordant \
+		--maxins 1000 \
+		-S {output} > {log} 2>&1" 
+        
+rule samtools_sam_to_bam:
+	input:
+		"2.Align/{rep}_1_val.sam"
+	output:
+		"3.Samtools/{rep}.bam"
+	shell:
+		"samtools view -@ 10 -S {input} -b -o {output}"
+
+rule samtools_sort:
+	input:
+		"3.Samtools/{rep}.bam"
+	output:
+		"3.Samtools/{rep}_sorted.bam"
+	shell:
+		"samtools sort {input} -o {output} -@ 10"
+
+rule samtools_index:
+	input:
+		"3.Samtools/{rep}_sorted.bam"
+	output:
+		"3.Samtools/{rep}_sorted.bam.bai"
+	shell:
+		"samtools index -@ 10 {input}"
+
+rule filter_mapping_unique_MAPQ_30:
+    input:
+        "3.Samtools/{rep}_sorted.bam.bai",
+        "3.Samtools/{rep}_sorted.bam"
+    output:
+        "3.Samtools/{rep}_sorted_unique_mapped.bam"
+    shell:
+        "samtools view -@ 20 -h -b {input[1]} -F 260 -q 30 > {output}"
+
+rule filter_PCR:
+    input:
+        "3.Samtools/{rep}_sorted_unique_mapped.bam"
+    output:
+        "3.Samtools/{rep}_sorted_unique_mapped_rd.bam",
+        "3.Samtools/{rep}_sort_mapped_rd.metrics.txt"
+    shell:
+        "java -Xms40g -Xmx40g -XX:ParallelGCThreads=20 -jar {PICARD} MarkDuplicates I={input} O={output[0]} VALIDATION_STRINGENCY=LENIENT M={output[1]} ASO=coordinate REMOVE_DUPLICATES=true"
+
+rule filter_Mt_Ch:
+	input:
+		"3.Samtools/{rep}_sorted_unique_mapped_rd.bam"
+	output:
+		"3.Samtools/{rep}_sorted_unique_mapped_rd_filtered.bam"
+	shell:
+		"samtools view -h {input} | grep -vE 'ChrM|ChrC' | samtools view -b -o {output}"
+
+rule samtools_index2:
+	input:
+		"3.Samtools/{rep}_sorted_unique_mapped_rd_filtered.bam"
+	output:
+		"3.Samtools/{rep}_sorted_unique_mapped_rd_filtered.bam.bai"
+	shell:
+		"samtools index -@ 10 {input}"
+
+rule alignmentSieve:
+	input:
+		"3.Samtools/{rep}_sorted_unique_mapped_rd_filtered.bam",
+		"3.Samtools/{rep}_sorted_unique_mapped_rd_filtered.bam.bai"
+	output:
+		"3.Samtools/{rep}_aligned.bam"
+	shell:  
+		"alignmentSieve --numberOfProcessors 15 --ATACshift --bam {input[0]} -o {output}"
+
+rule samtools_sort2:
+	input:
+		"3.Samtools/{rep}_aligned.bam"
+	output:
+		"3.Samtools/{rep}_final.bam"
+	shell:
+		"samtools sort {input} -o {output} -@ 10"
+
+rule samtools_index3:
+	input:
+		"3.Samtools/{rep}_final.bam"
+	output:
+		"3.Samtools/{rep}_final.bam.bai"
+	shell:  
+		"samtools index -@ 10 {input}"
+
+rule group_final_file:
+    input:
+        "3.Samtools/{rep}_final.bam",
+        "3.Samtools/{rep}_final.bam.bai"
+    output:
+        "4.Filteredbam/{rep}_final.bam",
+        "4.Filteredbam/{rep}_final.bam.bai"
+    shell:
+        """
+        mv {input[0]} {output[0]}
+        mv {input[1]} {output[1]}
+        """
+
+rule Normalize_final_file_RPGC:
+    input:
+        "4.Filteredbam/{rep}_final.bam"
+    output:
+        "4.Filteredbam/{rep}_RPGC.bw"
+    shell:
+        """
+        bamCoverage -b {input} -of bigwig -o {output} -p 20 --ignoreDuplicates --binSize 5 --normalizeUsing RPGC --effectiveGenomeSize 119481543 
+        """
+
+rule Normalize_final_file_RPKM:
+    input:
+        "4.Filteredbam/{rep}_final.bam"
+    output:
+        "4.Filteredbam/{rep}_RPKM.bw"
+    shell:
+        """
+        bamCoverage -b {input} -of bigwig -o {output} -p 20 --ignoreDuplicates --binSize 5 --normalizeUsing RPKM --effectiveGenomeSize 119481543 
+        """
+
+rule group_bw:
+    input:
+        "4.Filteredbam/{rep}_RPKM.bw",
+        "4.Filteredbam/{rep}_RPGC.bw"
+    output:
+        "4.Filteredbam/bw/{rep}_RPKM.bw",
+        "4.Filteredbam/bw/{rep}_RPGC.bw"
+    shell:
+        """
+        mv {input[0]} {output[0]}
+        mv {input[1]} {output[1]}
+        """
+
+rule bam2bed:
+    input:
+        "4.Filteredbam/{rep}_final.bam"
+    output:
+        "4.Filteredbam/{rep}_final.bed"
+    shell:
+        """
+        bedtools bamtobed -i {input} > {output}
+        """
+
+rule :
+    input:
+        "4.Filteredbam/{rep}_final.bed"
+    output:
+        "5.Callpeak/{rep}_peaks.narrowPeak"
+    shell:
+        """
+        macs2 callpeak -g 119481543 -t {input} -B --name 5.Callpeak/{wildcards.rep} -f BED --qvalue 0.01 --nomodel --shift -100 --extsize 200 
