@@ -8,8 +8,8 @@
 #Please rename and write your index of file                 
 
 REP_INDEX = {"1", "2"}
-trim_galore = "/home/data/D602_public/miniconda3/envs/trim-galore"
-PICARD = "/home/data/D602_public/soft/picard.jar"
+trim_galore = "./miniconda3/envs/trim-galore"
+PICARD = "./soft/picard.jar"
 
 rule all:
 	input :
@@ -54,7 +54,7 @@ rule bowtie2_mapping:
 		"2.Align/{rep}_1_val.log"         
 	shell:
 		"bowtie2 -p 10 \
-		-x /home/data/D602_public/zw_data/At_genome/At_bowtie2_index/Athaliana_447_TAIR10 \
+		-x ./zw_data/lAt_genome/At_bowtie2_index/Athaliana_447_TAIR10 \
 		-1 {input[0]} -2 {input[1]} \
         --no-unal \
         --no-mixed --no-discordant \
